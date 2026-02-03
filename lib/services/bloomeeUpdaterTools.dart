@@ -276,7 +276,7 @@ Future<Map<String, dynamic>> getAppUpdates() async {
 Future<String?> fetchChangelog(
     {Duration timeout = const Duration(seconds: 6)}) async {
   const changelogUrl =
-      'https://hemantkarya.github.io/BloomeeTunes/CHANGELOG.md';
+      'https://Martiiim.github.io/BloomeeTunes/CHANGELOG.md';
   try {
     final response = await http.get(Uri.parse(changelogUrl)).timeout(timeout);
     if (response.statusCode == 200) {
