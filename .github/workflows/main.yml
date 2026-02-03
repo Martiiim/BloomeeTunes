@@ -32,50 +32,56 @@ jobs:
             path: bloomee-linux.zip
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Install Linux Dependencies
+      - name: Install Linux Toolchain
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip libmpv-dev
 
-      # ULTRA CACHE: Utilizing your 6GB+ available space
-      - name: Ultra Cache
+      - name: Setup Build Caches
         uses: actions/cache@v4
         with:
           path: |
             ~/.pub-cache
             ~/.cargo/registry
+            ~/.cargo/git
             ~/.gradle/caches
             ~/.gradle/wrapper
             .dart_tool/
             target/
             rust/target/
             build/${{ matrix.platform }}
-          key: ${{ runner.os }}-${{ matrix.platform }}-ultra-v5-${{ hashFiles('**/pubspec.lock') }}
+          # v2 key to ensure we start fresh with the new path logic
+          key: ${{ runner.os }}-${{ matrix.platform }}-production-v2-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.platform }}-ultra-v5-
+            ${{ runner.os }}-${{ matrix.platform }}-production-v2-
 
-      - uses: subosito/flutter-action@v2
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Prep & Codegen
+      - name: Project Initialization
         run: |
           flutter pub get
           dart run build_runner build --delete-conflicting-outputs
 
-      - name: Build Platform
+      - name: Execute Production Build
         shell: bash
+        env:
+          # These flags help Rust/Isar realize they can reuse cached objects
+          CARGO_INCREMENTAL: "1"
+          SKIP_PRECOMPILED_BINARIES: "false"
         run: |
           if [ "${{ matrix.platform }}" = "android" ]; then
             flutter build apk --release
           elif [ "${{ matrix.platform }}" = "windows" ]; then
             flutter config --enable-windows-desktop
             flutter build windows --release
-            # Using powershell explicitly via bash to avoid path issues
             powershell.exe "Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force"
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             flutter config --enable-linux-desktop
@@ -83,27 +89,29 @@ jobs:
             zip -r bloomee-linux.zip build/linux/x64/release/bundle/*
           fi
 
-      - name: Upload Artifact
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.path }}
 
   publish:
+    name: Publish Release
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Extract version
-        id: extract_version
+      - name: Parse Application Version
+        id: version
         run: |
           VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | xargs | cut -d '#' -f 1 | tr -d '"' | tr -d "'")
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
 
-      - name: Download artifacts
+      - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
