@@ -1,3 +1,23 @@
+## [2.13.4] - 2026-02-02
+
+*Contributed by Martiiim*
+
+### Added
+- **Local MP3 Auto-Download**: Imported local MP3 files are now automatically marked as downloaded and appear in the offline library.
+- **Automatic Metadata Registration**: Local MP3 imports are registered in the download database for proper offline tracking.
+
+### Fixed
+- **Playlist Loading Performance**: Optimized playlist loading for playlists with local files by removing blocking file I/O operations.
+
+### Changed
+- **Responsive Search UI**: Search filter now uses fixed-width dropdown (110px) with horizontally scrollable source engine buttons.
+- **Download DB Queries**: Improved `getDownloadDB()` to skip blocking file existence checks for faster performance.
+- **Downloaded Songs Loading**: Optimized `getDownloadedSongs()` to trust database records instead of verifying file existence on every load.
+
+### Performance
+- **Significant speedup** when opening playlists with many local MP3 files - eliminates UI freezing.
+- Reduced blocking I/O operations during playlist initialization.
+
 ## [2.13.3] - 2025-12-01
 
 ### Added

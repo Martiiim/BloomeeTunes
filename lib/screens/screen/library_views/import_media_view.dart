@@ -5,6 +5,7 @@ import 'package:Bloomee/screens/widgets/snackbar.dart';
 import 'package:Bloomee/services/db/bloomee_db_service.dart';
 import 'package:Bloomee/utils/external_list_importer.dart';
 import 'package:Bloomee/services/import_export_service.dart';
+import 'package:Bloomee/services/local_mp3_import_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +13,8 @@ import 'package:icons_plus/icons_plus.dart';
 import 'package:modal_bottom_sheet/modal_bottom_sheet.dart';
 import 'package:Bloomee/screens/widgets/import_playlist.dart';
 import 'package:Bloomee/theme_data/default.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 enum ImportType {
   spotifyPlaylist,
@@ -43,10 +46,13 @@ class ImportMediaFromPlatformsView extends StatelessWidget {
               .merge(Default_Theme.secondoryTextStyle),
         ),
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.start,
-        children: [
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 80),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
           ImportFromBtn(
             btnName: "Playlist from Spotify",
             btnIcon: FontAwesome.spotify_brand,
@@ -113,6 +119,12 @@ class ImportMediaFromPlatformsView extends StatelessWidget {
                     importType: ImportType.youtubeMusicPlaylist);
               }),
           ImportFromBtn(
+              btnName: "Import Local MP3 Files",
+              btnIcon: MingCute.music_fill,
+              onClickFunc: () async {
+                _importLocalMp3s(context);
+              }),
+          ImportFromBtn(
               btnName: "Import Bloomee Files",
               btnIcon: MingCute.file_import_fill,
               onClickFunc: () {
@@ -172,7 +184,9 @@ class ImportMediaFromPlatformsView extends StatelessWidget {
                   ),
                 );
               }),
-        ],
+          ],
+          ),
+        ),
       ),
     );
   }
@@ -377,7 +391,8 @@ Future getIdAndShowBottomSheet(BuildContext context,
                                     });
                                     break;
                                   case ImportType.storage:
-                                  // TODO: Handle this case.
+                                    // Handled by the separate function
+                                    break;
                                 }
                               },
                             ),
@@ -394,4 +409,222 @@ Future getIdAndShowBottomSheet(BuildContext context,
       );
     },
   );
+}
+
+/// Function to handle importing local MP3 files
+Future<void> _importLocalMp3s(BuildContext context) async {
+  try {
+    // Pick multiple MP3 files
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowMultiple: true,
+      allowedExtensions: ['mp3'],
+    );
+
+    if (result == null || result.files.isEmpty) {
+      log("No files selected", name: "Local MP3 Import");
+      return;
+    }
+
+    // Show progress dialog
+    if (!context.mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return _LocalMp3ImportProgressDialog(
+          filePaths: result.files.map((f) => f.path!).toList(),
+        );
+      },
+    );
+  } catch (e) {
+    log("Error picking files: $e", name: "Local MP3 Import");
+    SnackbarService.showMessage("Error selecting files: $e");
+  }
+}
+
+/// Dialog widget for showing MP3 import progress
+class _LocalMp3ImportProgressDialog extends StatefulWidget {
+  final List<String> filePaths;
+
+  const _LocalMp3ImportProgressDialog({
+    Key? key,
+    required this.filePaths,
+  }) : super(key: key);
+
+  @override
+  State<_LocalMp3ImportProgressDialog> createState() =>
+      _LocalMp3ImportProgressDialogState();
+}
+
+class _LocalMp3ImportProgressDialogState
+    extends State<_LocalMp3ImportProgressDialog> {
+  late Future<void> _importFuture;
+  int _processedCount = 0;
+  int _successCount = 0;
+  String _currentFile = "";
+
+  @override
+  void initState() {
+    super.initState();
+    _importFuture = _performImport();
+  }
+
+  Future<void> _performImport() async {
+    try {
+      // Get app document directory for offline storage
+      final appDocDir = (await getApplicationDocumentsDirectory()).path;
+
+      final results = await LocalMp3ImportService.extractMetadataFromFiles(
+        widget.filePaths,
+      );
+
+      // Add all valid MP3s to the library
+      for (final result in results) {
+        setState(() {
+          _processedCount++;
+          _currentFile = result.title;
+        });
+
+        try {
+          // Copy MP3 to app's offline storage for offline availability
+          final offlinePath = await LocalMp3ImportService.copyMp3ToAppDirectory(
+            result.filePath,
+            appDocDir,
+          );
+
+          // Create playlist if it doesn't exist
+          final playlistName = "Local MP3s";
+          await BloomeeDBService.createPlaylist(playlistName);
+
+          // Add media item to playlist with offline path
+          final mediaItemDB = result.toMediaItemDB();
+          // Update streaming URL to use offline copy if available
+          if (offlinePath != null) {
+            mediaItemDB.streamingURL = 'file://$offlinePath';
+            mediaItemDB.permaURL = offlinePath;
+          }
+          await BloomeeDBService.addMediaItem(mediaItemDB, playlistName);
+
+          // Register as downloaded so it appears in offline library
+          if (offlinePath != null) {
+            final fileName = p.basename(offlinePath);
+            final filePath = p.dirname(offlinePath);
+            await BloomeeDBService.putDownloadDB(
+              fileName: fileName,
+              filePath: filePath,
+              lastDownloaded: DateTime.now(),
+              mediaItem: MediaItemDB2MediaItem(mediaItemDB),
+            );
+          }
+
+          setState(() {
+            _successCount++;
+          });
+        } catch (e) {
+          log("Error adding media item ${result.title}: $e",
+              name: "Local MP3 Import");
+        }
+      }
+
+      // Show completion message
+      if (mounted) {
+        SnackbarService.showMessage(
+          "Imported $_successCount of ${widget.filePaths.length} MP3 files",
+        );
+      }
+    } catch (e) {
+      log("Import error: $e", name: "Local MP3 Import");
+      if (mounted) {
+        SnackbarService.showMessage("Import failed: $e");
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Default_Theme.themeColor,
+      title: const Text(
+        "Importing MP3 Files",
+        style: TextStyle(
+          color: Default_Theme.primaryColor1,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      content: FutureBuilder<void>(
+        future: _importFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(
+                  color: Default_Theme.accentColor1,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  "Processing: $_processedCount/${widget.filePaths.length}",
+                  style: const TextStyle(
+                    color: Default_Theme.primaryColor1,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _currentFile,
+                  style: const TextStyle(
+                    color: Default_Theme.primaryColor2,
+                    fontSize: 12,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            );
+          }
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "Import Complete!",
+                style: const TextStyle(
+                  color: Default_Theme.primaryColor1,
+                  fontWeight: FontWeight.bold,
+                ).merge(Default_Theme.primaryTextStyle),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "Successfully imported: $_successCount/${widget.filePaths.length}",
+                style: const TextStyle(
+                  color: Default_Theme.primaryColor1,
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (_successCount > 0)
+                Text(
+                  "Your MP3s have been added to 'Local MP3s' playlist",
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Default_Theme.primaryColor2,
+                    fontSize: 12,
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+          child: const Text(
+            "Done",
+            style: TextStyle(color: Default_Theme.accentColor1),
+          ),
+        ),
+      ],
+    );
+  }
 }

@@ -1,9 +1,9 @@
 name: Bloomee
-description: An Open source Free Music Player.
+description: An open source free music player.
 
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
-version: 2.13.3+0
+version: 2.13.4+1
 
 environment:
   sdk: '>=3.0.6 <4.0.0'

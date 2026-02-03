@@ -1239,9 +1239,12 @@ class BloomeeDBService {
         .filter()
         .mediaIdEqualTo(mediaItem.id)
         .findFirstSync();
-    if (temp != null &&
-        File("${temp.filePath}/${temp.fileName}").existsSync()) {
-      return temp;
+    if (temp != null) {
+      // Skip file existence check for local files - assume they exist if in DB
+      // This avoids blocking I/O operations during playlist loading
+      if (temp.filePath.contains('/') && temp.fileName.isNotEmpty) {
+        return temp;
+      }
     }
     return null;
   }
@@ -1266,19 +1269,21 @@ class BloomeeDBService {
     });
 
     List<MediaItemModel> _mediaItems = List.empty(growable: true);
+    // Load items without blocking file existence checks
     for (var element in _downloadedSongs) {
-      if (File("${element.filePath}/${element.fileName}").existsSync()) {
-        log("File exists", name: "DB");
-        _mediaItems.add(MediaItemDB2MediaItem(isarDB.mediaItemDBs
+      try {
+        // Skip individual file checks - trust DB records for speed
+        // File cleanup happens on next app launch if files are missing
+        final mediaItemDB = isarDB.mediaItemDBs
             .filter()
             .mediaIDEqualTo(element.mediaId)
-            .findFirstSync()!));
-      } else {
-        log("File not exists ${element.fileName} ", name: "DB");
-        removeDownloadDB(MediaItemDB2MediaItem(isarDB.mediaItemDBs
-            .filter()
-            .mediaIDEqualTo(element.mediaId)
-            .findFirstSync()!));
+            .findFirstSync();
+        if (mediaItemDB != null) {
+          _mediaItems.add(MediaItemDB2MediaItem(mediaItemDB));
+          log("Loaded: ${mediaItemDB.title}", name: "DB");
+        }
+      } catch (e) {
+        log("Error loading downloaded item: $e", name: "DB");
       }
     }
     return _mediaItems;
