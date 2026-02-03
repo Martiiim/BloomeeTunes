@@ -6,7 +6,6 @@ on:
       - 'v*'
   workflow_dispatch:
 
-# Permitting concurrent runs to cancel if a new one starts (saves minutes/money)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Android Bundles
+      - name: Cache Android & Isar
         uses: actions/cache@v4
         with:
           path: |
@@ -26,18 +25,22 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
             ~/.cargo/registry
-            ~/.cargo/git
             target/
-          key: ${{ runner.os }}-android-optim-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
+            .dart_tool/build/generated
+          key: ${{ runner.os }}-android-bloomee-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
-            ${{ runner.os }}-android-optim-
+            ${{ runner.os }}-android-bloomee-
 
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
-          # Caching the Flutter SDK itself saves ~30-60s
-          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-:hash:'
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Generate Isar Code
+        run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Build APK
         run: flutter build apk --release
@@ -54,17 +57,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Windows Build
+      - name: Cache Windows (Isar/MediaKit)
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.PUB_CACHE }}
-            build\windows\x64\release
-            target\
-          # Adding Cargo.lock to the hash is vital for Rust-based Flutter plugins
-          key: ${{ runner.os }}-win-optim-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
+            build/windows/x64/release
+            .dart_tool/build/generated
+          key: ${{ runner.os }}-windows-bloomee-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
-            ${{ runner.os }}-win-optim-
+            ${{ runner.os }}-windows-bloomee-
 
       - uses: subosito/flutter-action@v2
         with:
@@ -74,8 +76,13 @@ jobs:
       - name: Build Windows
         run: |
           flutter config --enable-windows-desktop
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
           flutter build windows --release
-          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force
+
+      - name: Package Windows
+        shell: pwsh
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -89,22 +96,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Apt-get is slow. We only run it if dependencies aren't already there.
       - name: Install Linux Deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip
+          sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip libmpv-dev
 
-      - name: Cache Linux Rust/Flutter
+      - name: Cache Linux Build
         uses: actions/cache@v4
         with:
           path: |
             ~/.pub-cache
-            target/
             build/linux/x64/release/bundle
-          key: ${{ runner.os }}-linux-optim-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
+            .dart_tool/build/generated
+          key: ${{ runner.os }}-linux-bloomee-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
-            ${{ runner.os }}-linux-optim-
+            ${{ runner.os }}-linux-bloomee-
 
       - uses: subosito/flutter-action@v2
         with:
@@ -114,6 +120,8 @@ jobs:
       - name: Build Linux
         run: |
           flutter config --enable-linux-desktop
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
           flutter build linux --release
           cd build/linux/x64/release/bundle
           zip -r $GITHUB_WORKSPACE/bloomee-linux.zip .
