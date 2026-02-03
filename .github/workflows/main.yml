@@ -53,11 +53,10 @@ jobs:
             .dart_tool/
             target/
             rust/target/
-            build/${{ matrix.platform }}
-          # v2 key to ensure we start fresh with the new path logic
-          key: ${{ runner.os }}-${{ matrix.platform }}-production-v2-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
+          # Bumped to v4 to clear out the "poisoned" build folder caches
+          key: ${{ runner.os }}-${{ matrix.platform }}-production-v4-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.platform }}-production-v2-
+            ${{ runner.os }}-${{ matrix.platform }}-production-v4-
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -73,20 +72,20 @@ jobs:
       - name: Execute Production Build
         shell: bash
         env:
-          # These flags help Rust/Isar realize they can reuse cached objects
           CARGO_INCREMENTAL: "1"
-          SKIP_PRECOMPILED_BINARIES: "false"
         run: |
           if [ "${{ matrix.platform }}" = "android" ]; then
             flutter build apk --release
           elif [ "${{ matrix.platform }}" = "windows" ]; then
             flutter config --enable-windows-desktop
             flutter build windows --release
+            # Zip the release runner folder specifically
             powershell.exe "Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force"
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             flutter config --enable-linux-desktop
             flutter build linux --release
-            zip -r bloomee-linux.zip build/linux/x64/release/bundle/*
+            cd build/linux/x64/release/bundle
+            zip -r ../../../../bloomee-linux.zip .
           fi
 
       - name: Upload Build Artifacts
