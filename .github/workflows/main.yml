@@ -11,99 +11,120 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # --- SHARED BUILD LOGIC ---
-  build:
-    name: Build ${{ matrix.platform }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: android
-            os: ubuntu-latest
-            artifact: android-apk
-            path: build/app/outputs/flutter-apk/app-release.apk
-          - platform: windows
-            os: windows-latest
-            artifact: windows-zip
-            path: bloomee-windows.zip
-          - platform: linux
-            os: ubuntu-latest
-            artifact: linux-zip
-            path: bloomee-linux.zip
-
+  # --- LINUX BUILD (The most complex one) ---
+  build-linux:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 1. High-Performance Caching
-      - name: Cache Flutter & Dependencies
+      - name: Install Linux Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip libmpv-dev libjsoncpp-dev libsecret-1-dev
+
+      - name: Cache Linux Everything
         uses: actions/cache@v4
         with:
           path: |
             ~/.pub-cache
             ~/.cargo/registry
-            ~/.cargo/git
-            ~/.gradle/caches
-            ~/.gradle/wrapper
             target/
             build/linux/x64/release/obj
-            build/windows/x64/release/obj
-          # Hash includes pubspec and lock files to ensure cache updates when deps change
-          key: ${{ runner.os }}-${{ matrix.platform }}-ultra-v1-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.platform }}-ultra-v1-
+          key: linux-ultra-v6-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: linux-ultra-v6-
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          cache: true # This caches the Flutter SDK itself
+          cache: true
 
-      - name: Install System Toolchain
-        if: matrix.platform == 'linux'
+      - name: Build
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip libmpv-dev libjsoncpp-dev
-
-      - name: Project Initialization
-        shell: bash
-        run: |
-          if [ "${{ matrix.platform }}" = "linux" ]; then flutter config --enable-linux-desktop; fi
-          if [ "${{ matrix.platform }}" = "windows" ]; then flutter config --enable-windows-desktop; fi
+          flutter config --enable-linux-desktop
           flutter pub get
-          # build_runner is the slowest part; only run if needed or use --delete-conflicting-outputs
           dart run build_runner build --delete-conflicting-outputs
+          flutter build linux --release
+          cd build/linux/x64/release/bundle
+          zip -r $GITHUB_WORKSPACE/bloomee-linux.zip .
 
-      - name: Execute Production Build
-        shell: bash
-        run: |
-          if [ "${{ matrix.platform }}" = "android" ]; then
-            flutter build apk --release
-          elif [ "${{ matrix.platform }}" = "windows" ]; then
-            flutter build windows --release
-            powershell.exe "Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force"
-          elif [ "${{ matrix.platform }}" = "linux" ]; then
-            flutter build linux --release
-            cd build/linux/x64/release/bundle
-            zip -r ../../../../bloomee-linux.zip .
-          fi
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.path }}
+          name: linux-zip
+          path: bloomee-linux.zip
 
-  # --- PUBLISH JOB (unchanged, depends on build) ---
+  # --- WINDOWS BUILD ---
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache Windows Everything
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            build\windows\x64\release\obj
+            target\
+          key: win-ultra-v6-${{ hashFiles('**/pubspec.lock') }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Build
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+          flutter build windows --release
+          powershell.exe "Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: bloomee-windows.zip
+
+  # --- ANDROID BUILD ---
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Android Everything
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-ultra-v6-${{ hashFiles('**/pubspec.lock') }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Build
+        run: |
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+          flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  # --- RELEASE JOB ---
   publish:
-    needs: build
+    needs: [build-linux, build-windows, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Extract version
+      - name: Get Version
         run: |
           VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | xargs | cut -d '#' -f 1 | tr -d '"' | tr -d "'")
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
@@ -111,7 +132,7 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true 
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || env.APP_VERSION }}
