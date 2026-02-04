@@ -11,6 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # --- SHARED BUILD LOGIC ---
   build:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -35,13 +36,8 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Linux Toolchain
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip libmpv-dev libjsoncpp-dev libsecret-1-dev
-
-      - name: Setup Build Caches
+      # 1. High-Performance Caching
+      - name: Cache Flutter & Dependencies
         uses: actions/cache@v4
         with:
           path: |
@@ -50,46 +46,44 @@ jobs:
             ~/.cargo/git
             ~/.gradle/caches
             ~/.gradle/wrapper
-            .dart_tool/
             target/
-            rust/target/
-          key: ${{ runner.os }}-${{ matrix.platform }}-production-v4-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
+            build/linux/x64/release/obj
+            build/windows/x64/release/obj
+          # Hash includes pubspec and lock files to ensure cache updates when deps change
+          key: ${{ runner.os }}-${{ matrix.platform }}-ultra-v1-${{ hashFiles('**/pubspec.lock', '**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.platform }}-production-v4-
+            ${{ runner.os }}-${{ matrix.platform }}-ultra-v1-
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          cache: true
+          cache: true # This caches the Flutter SDK itself
+
+      - name: Install System Toolchain
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip libmpv-dev libjsoncpp-dev
 
       - name: Project Initialization
         shell: bash
         run: |
-          # Enable desktop support BEFORE pub get and build_runner
-          if [ "${{ matrix.platform }}" = "windows" ]; then
-            flutter config --enable-windows-desktop
-          elif [ "${{ matrix.platform }}" = "linux" ]; then
-            flutter config --enable-linux-desktop
-          fi
-          
+          if [ "${{ matrix.platform }}" = "linux" ]; then flutter config --enable-linux-desktop; fi
+          if [ "${{ matrix.platform }}" = "windows" ]; then flutter config --enable-windows-desktop; fi
           flutter pub get
-          # Native assets are often generated/linked during build_runner
+          # build_runner is the slowest part; only run if needed or use --delete-conflicting-outputs
           dart run build_runner build --delete-conflicting-outputs
 
       - name: Execute Production Build
         shell: bash
-        env:
-          CARGO_INCREMENTAL: "1"
         run: |
           if [ "${{ matrix.platform }}" = "android" ]; then
             flutter build apk --release
           elif [ "${{ matrix.platform }}" = "windows" ]; then
             flutter build windows --release
-            # Use PowerShell for zipping on Windows runners
             powershell.exe "Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force"
           elif [ "${{ matrix.platform }}" = "linux" ]; then
-            # The --release flag is critical for native_assets pathing
             flutter build linux --release
             cd build/linux/x64/release/bundle
             zip -r ../../../../bloomee-linux.zip .
@@ -101,28 +95,22 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.path }}
 
+  # --- PUBLISH JOB (unchanged, depends on build) ---
   publish:
-    name: Publish Release
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Parse Application Version
-        id: version
+      - uses: actions/checkout@v4
+      - name: Extract version
         run: |
           VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | xargs | cut -d '#' -f 1 | tr -d '"' | tr -d "'")
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true 
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -132,4 +120,3 @@ jobs:
             release-assets/*.apk
             release-assets/*.zip
           generate_release_notes: true
-          draft: ${{ github.ref_type != 'tag' }}
