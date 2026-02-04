@@ -248,10 +248,9 @@ Future<Map<String, dynamic>> getAppUpdates() async {
     // Contains the latest changelog read by the user. [eg. v2.11.6+171] (can be null)
     final readChangelogs =
         await BloomeeDBService.getSettingStr(GlobalStrConsts.readChangelogs);
-    final currVer = "v${updates['currVer']}";
-    final newVer = "v${updates['newVer']}";
+    final currVer = "v${updates['currVer'] ?? '0.0.0'}";
 
-    log('Current version: $currVer, New version: $newVer, Read changelogs: $readChangelogs',
+    log('Current version: $currVer, Read changelogs: $readChangelogs',
         name: 'UpdaterTools');
 
     if (readChangelogs == null || readChangelogs != currVer) {
