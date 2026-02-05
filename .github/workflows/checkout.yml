@@ -1,19 +1,7 @@
 name: "Build & Check"
 
 
-on:
-  push:
-    paths-ignore:
-      - 'README.md'
-      - 'LICENSE'
-      - 'CHANGELOG.md'
-      - 'CONTRIBUTING.md'
-      - 'CODE_OF_CONDUCT.md'
-      - './fastlane/**'
-      - './github/FUNDING.yml'
-      - './ghpage/**'
-
-    branches: main
+on: workflow_dispatch
     
 jobs:
     build:
@@ -70,6 +58,4 @@ jobs:
                 path: |
                   build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}.apk
                   build/windows/x64/bloomee_tunes_windows_x64_v${{ env.VERSION }}+${{github.run_number}}.zip
-
-
     

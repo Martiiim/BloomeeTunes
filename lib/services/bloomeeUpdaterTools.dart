@@ -248,14 +248,13 @@ Future<Map<String, dynamic>> getAppUpdates() async {
     // Contains the latest changelog read by the user. [eg. v2.11.6+171] (can be null)
     final readChangelogs =
         await BloomeeDBService.getSettingStr(GlobalStrConsts.readChangelogs);
-    final currVer = "v${updates['currVer']}";
-    final newVer = "v${updates['newVer']}";
+        final currVer = "v${updates['currVer']}";
+        final newVer = "v${updates['newVer']}";
 
-    log('Current version: $currVer, New version: $newVer, Read changelogs: $readChangelogs',
+     log('Current version: $currVer, New version: $newVer, Read changelogs: $readChangelogs',
         name: 'UpdaterTools');
 
-    if (currVer == newVer &&
-        (readChangelogs == null || readChangelogs != currVer)) {
+    if (readChangelogs == null || readChangelogs != currVer) {
       final changelogText = await fetchChangelog();
       updates['changelogs'] = changelogText;
     } else {
@@ -276,7 +275,7 @@ Future<Map<String, dynamic>> getAppUpdates() async {
 Future<String?> fetchChangelog(
     {Duration timeout = const Duration(seconds: 6)}) async {
   const changelogUrl =
-      'https://hemantkarya.github.io/BloomeeTunes/CHANGELOG.md';
+      'https://HemantKArya.github.io/BloomeeTunes/CHANGELOG.md';
   try {
     final response = await http.get(Uri.parse(changelogUrl)).timeout(timeout);
     if (response.statusCode == 200) {

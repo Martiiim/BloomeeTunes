@@ -1,113 +1,143 @@
-name: "Build & Release"
+name: Build and Release
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
-    branches: main
-    
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-    build:
-        name: Build & Release
-        runs-on: windows-latest
-        steps:
-            - name: Checkout Repository
-              uses: actions/checkout@v4
+  # --- LINUX BUILD (The most complex one) ---
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-            - name: Setup-Java
-              uses: actions/setup-java@v3.12.0
-              with:
-                distribution: 'oracle'
-                java-version: '17'
+      - name: Install Linux Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev liblzma-dev libstdc++6 pkg-config ninja-build zip libmpv-dev libjsoncpp-dev libsecret-1-dev
 
-            - name: Setup Flutter
-              uses: subosito/flutter-action@v2
-              with:
-                flutter-version: '3.35.4'
-                channel: 'stable'
+      - name: Cache Linux Everything
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ~/.cargo/registry
+            target/
+            build/linux/x64/release/obj
+          key: linux-ultra-v6-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: linux-ultra-v6-
 
-            - name: Install Dependencies
-              run: flutter pub get
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
 
-            - name: Extract version from pubspec.yaml
-              shell: powershell
-              run: |
-                  $vLine = Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' | Select-Object -First 1
-                  if (-not $vLine) { Write-Error 'version not found in pubspec.yaml'; exit 1 }
-                  $ver = $vLine.Matches[0].Groups[1].Value.Split('+')[0]
-                  echo "VERSION=$ver" >> $env:GITHUB_ENV
+      - name: Build
+        run: |
+          flutter config --enable-linux-desktop
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+          flutter build linux --release
+          cd build/linux/x64/release/bundle
+          zip -r $GITHUB_WORKSPACE/bloomee-linux.zip .
 
-            - name: Create keystore file
-              run: |
-                  $b64 = "${{ secrets.KEY_STORE }}"
-                  $filename = "./android/bloomee.jks"
-                  $bytes = [Convert]::FromBase64String($b64)
-                  [IO.File]::WriteAllBytes($filename, $bytes)
-              # run: echo "${{ secrets.KEY_STORE }}" | base64 --decode > ./android/bloomee.jks
-            
-            - name: Create Keystore properties
-              run: |
-                  echo keyPassword=\${{ secrets.KEY_PASSWORD }} > ./android/key.properties
-                  echo storePassword=\${{ secrets.STORE_PASSWORD }} >> ./android/key.properties
-                  echo keyAlias=\${{ secrets.KEY_ALIAS }} >> ./android/key.properties
-            
-            - name: Build App files
-              run: flutter build apk --release --split-per-abi --build-number ${{github.run_number}}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-zip
+          path: bloomee-linux.zip
 
-            - name: Verify Sign
-              run: |
-                  $buildToolsDir = Get-ChildItem "$env:ANDROID_HOME\build-tools" | Where-Object { $_.PSIsContainer } | Sort-Object Name -Descending | Select-Object -First 1
-                  Write-Host "Using build tools version: $($buildToolsDir.Name)"
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-release.apk
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-                  & "$($buildToolsDir.FullName)\apksigner.bat" verify build/app/outputs/flutter-apk/app-x86_64-release.apk
+  # --- WINDOWS BUILD ---
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache Windows Everything
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            build\windows\x64\release\obj
+            target\
+          key: win-ultra-v6-${{ hashFiles('**/pubspec.lock') }}
 
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
 
-            - name: Rename APK file
-              shell: powershell
-              run: |
-                  Rename-Item -Path "build/app/outputs/flutter-apk/app-release.apk" -NewName "bloomee_tunes_android_v$env:VERSION+${{github.run_number}}_universal.apk"
-                  Rename-Item -Path "build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk" -NewName "bloomee_tunes_android_v$env:VERSION+${{github.run_number}}_armeabi-v7a.apk"
-                  Rename-Item -Path "build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" -NewName "bloomee_tunes_android_v$env:VERSION+${{github.run_number}}_arm64-v8a.apk"
-                  Rename-Item -Path "build/app/outputs/flutter-apk/app-x86_64-release.apk" -NewName "bloomee_tunes_android_v$env:VERSION+${{github.run_number}}_x86_64.apk"
+      - name: Build
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+          flutter build windows --release
+          powershell.exe "Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath bloomee-windows.zip -Force"
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: bloomee-windows.zip
 
-            - name: Build Windows App
-              run: flutter build windows --release --build-number ${{github.run_number}}
-            
-            - name: Create build-number.txt file
-              run: echo ${{github.run_number}} > build-number.txt
+  # --- ANDROID BUILD ---
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-            - name: Rename file
-              run: Rename-Item -Path "build/windows/x64/runner/Release/bloomee.exe" -NewName "Bloomee.exe"
-           
-            - name: ZIP build
-              run: Compress-Archive -Path build/windows/x64/runner/Release/* -Destination  build/windows/x64/bloomee_tunes_windows_x64_v${{ env.VERSION }}+${{github.run_number}}.zip
-            
-            - name: Upload Artifacts
-              uses: actions/upload-artifact@v4
-              with:
-                name: Release
-                path: |
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_universal.apk
-                  build/windows/x64/bloomee_tunes_windows_x64_v${{ env.VERSION }}+${{github.run_number}}.zip
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_armeabi-v7a.apk
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_arm64-v8a.apk
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_x86_64.apk
+      - name: Cache Android Everything
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-ultra-v6-${{ hashFiles('**/pubspec.lock') }}
 
-            - name: Create Release
-              uses: ncipollo/release-action@v1
-              with:
-                artifacts: |
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_universal.apk
-                  build/windows/x64/bloomee_tunes_windows_x64_v${{ env.VERSION }}+${{github.run_number}}.zip
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_armeabi-v7a.apk
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_arm64-v8a.apk
-                  build/app/outputs/flutter-apk/bloomee_tunes_android_v${{ env.VERSION }}+${{github.run_number}}_x86_64.apk
-                  build-number.txt
-                  
-                tag: v${{ env.VERSION }}+${{github.run_number}}
-                token: ${{secrets.SECRET_KEY}}
-                prerelease: true
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
 
-    
+      - name: Build
+        run: |
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+          flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  # --- RELEASE JOB ---
+  publish:
+    needs: [build-linux, build-windows, build-android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get Version
+        run: |
+          VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | xargs | cut -d '#' -f 1 | tr -d '"' | tr -d "'")
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true 
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || env.APP_VERSION }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || env.APP_VERSION }}
+          files: |
+            release-assets/*.apk
+            release-assets/*.zip
+          generate_release_notes: true

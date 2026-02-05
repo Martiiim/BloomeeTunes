@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMediaLibraryUsageDescription</key>
+	<string>Bloomee needs access to your music library to import local MP3 files</string>
 </dict>
 </plist>

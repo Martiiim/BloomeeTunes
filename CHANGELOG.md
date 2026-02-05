@@ -1,3 +1,15 @@
+## [2.13.4] - 2026-02-02
+
+### Added
+- **Local MP3 Auto-Download**: Imported local MP3 files are now automatically marked as downloaded and appear in the offline library.
+- **Automatic Metadata Registration**: Local MP3 imports are registered in the download database for proper offline tracking.
+
+### Fixed
+- **Playlist Loading Performance**: Optimized playlist loading for playlists with local files by removing blocking file I/O operations.
+
+### Contribution
+- Made by **Martiiim**
+
 ## [2.13.3] - 2025-12-01
 
 ### Added

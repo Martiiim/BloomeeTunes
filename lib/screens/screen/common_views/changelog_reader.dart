@@ -606,6 +606,8 @@ class CategorySection extends StatelessWidget {
         return (emoji: '🐛', color: Colors.orangeAccent.shade400);
       case 'removed':
         return (emoji: '❌', color: Colors.redAccent.shade400);
+      case 'contribution':
+        return (emoji: '🤝', color: Colors.purpleAccent.shade400);
       default:
         return (emoji: '🔹', color: Colors.grey);
     }
